@@ -2,7 +2,9 @@ package main
 
 import (
 	"bufio"
+	"bytes"
 	"fmt"
+	"io"
 	"log"
 	"net"
 	"os"
@@ -19,12 +21,11 @@ var isReady = false
 //var resultMedian = make(chan int, 1)
 //var resultMode = make(chan int, 1)
 
-var userInputValuePipe = make(chan []int, 1)
 var userInputValueSharedMemory = make(chan []int, 1)
 
 func main() {
 
-	// 建立 udp 服务器
+	// 建立 tcp server
 	listen, err := net.Listen("tcp", "localhost:1888")
 	if err != nil {
 		fmt.Println("listen failed error:%v\n", err)
@@ -32,10 +33,13 @@ func main() {
 	}
 	defer listen.Close() // close service
 	fmt.Println("server is ready")
+
+	reader, wirter := io.Pipe()
+
 	//go thread socket client
 	go client_socket()
 	///go thread pipe client
-	go client_pipe(userInputValuePipe)
+	go client_pipe(*reader)
 	///go thread shared memory client
 	go client_shared_memory(userInputValueSharedMemory)
 	time.Sleep(1 * time.Second)
@@ -79,12 +83,13 @@ func main() {
 	//resultMedian <- median(values)
 	//resultMode <- mode(values)
 
-	//use goroutine write channel (sender)
 	go func() {
-		//pass user input value to channel for pipe client
-		userInputValuePipe <- values
+		defer wirter.Close()
+		//pass user input value to PipeWriter for pipe client
+		fmt.Fprint(wirter, values)
 	}()
 
+	//use goroutine write channel (sender)
 	go func() {
 		//pass user input value to channel for Shared Memory client
 		userInputValueSharedMemory <- values
@@ -183,16 +188,34 @@ func client_socket() {
 	}
 }
 
-func client_pipe(userInputValue chan []int) {
+func client_pipe(reader io.PipeReader) {
 
 	// 建立client
 	fmt.Println("pipe client is ready")
 	for {
 		if isReady {
-			//medianValue := <-resultMedian
-			userValue := <-userInputValue
+			// Creating a buffer
+			buffer := new(bytes.Buffer)
 
-			fmt.Println("pipe client  Median value  : ", median(userValue))
+			// Calling ReadFrom method and writing
+			// data into buffer
+			buffer.ReadFrom(&reader)
+
+			//byte to string
+			temp := (buffer.String())
+			//remove "[]"
+			res := strings.Split(strings.Trim(temp, "[]"), " ")
+			values := make([]int, 0, len(res))
+			for _, raw := range res {
+				v, err := strconv.Atoi(raw)
+				if err != nil {
+					log.Print(err)
+					continue
+				}
+				values = append(values, v)
+			}
+
+			fmt.Println("pipe client  Median value  : ", median(values))
 		}
 		time.Sleep(1 * time.Second)
 	}
