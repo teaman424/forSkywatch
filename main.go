@@ -14,11 +14,16 @@ import (
 )
 
 var isReady = false
-var resultAverage = make(chan float64, 1)
-var resultMedian = make(chan int, 1)
-var resultMode = make(chan int, 1)
+
+//var resultAverage = make(chan float64, 1)
+//var resultMedian = make(chan int, 1)
+//var resultMode = make(chan int, 1)
+
+var userInputValuePipe = make(chan []int, 1)
+var userInputValueSharedMemory = make(chan []int, 1)
 
 func main() {
+
 	// 建立 udp 服务器
 	listen, err := net.Listen("tcp", "localhost:1888")
 	if err != nil {
@@ -26,13 +31,13 @@ func main() {
 		return
 	}
 	defer listen.Close() // close service
-	fmt.Println("udp server is ready")
+	fmt.Println("server is ready")
 	//go thread socket client
 	go client_socket()
 	///go thread pipe client
-	go client_pipe()
+	go client_pipe(userInputValuePipe)
 	///go thread shared memory client
-	go client_shared_memory()
+	go client_shared_memory(userInputValueSharedMemory)
 	time.Sleep(1 * time.Second)
 
 	isInputString := false
@@ -69,13 +74,22 @@ func main() {
 		values = append(values, v)
 	}
 
-	//get want result
-	resultAverage <- average(values)
-	resultMedian <- median(values)
-	resultMode <- mode(values)
-	fmt.Println("\n result median : ", resultMedian)
-	fmt.Println("\n result average : ", resultAverage)
-	fmt.Println("\n result mode : ", resultMode)
+	//get want result  (misunderstanding assignments)
+	//resultAverage <- average(values)
+	//resultMedian <- median(values)
+	//resultMode <- mode(values)
+
+	//use goroutine write channel (sender)
+	go func() {
+		//pass user input value to channel for pipe client
+		userInputValuePipe <- values
+	}()
+
+	go func() {
+		//pass user input value to channel for Shared Memory client
+		userInputValueSharedMemory <- values
+	}()
+
 	isReady = true
 	//send result to client
 	for {
@@ -87,11 +101,11 @@ func main() {
 
 		fmt.Println(conn.RemoteAddr().String(), " tcp connect success")
 		//using goroutine
-		go handleConnection(conn)
+		go handleConnection(conn, values)
 	}
 }
 
-func handleConnection(conn net.Conn) {
+func handleConnection(conn net.Conn, values []int) {
 	defer conn.Close()
 	buffer := make([]byte, 2048)
 
@@ -104,14 +118,11 @@ func handleConnection(conn net.Conn) {
 			return
 		}
 
-		//recv := string(buffer[:n])
 		//fmt.Println(conn.RemoteAddr().String(), "\n receive data string:", recv)
-		averageVlaue := <-resultAverage
-		//fmt.Println("resultAverage : ", averageVlaue)
-		buffer = []byte(fmt.Sprintf("%v", averageVlaue))
-		//fmt.Println("resultAverage : ", fmt.Sprintf("%v", averageVlaue))
-		//fmt.Println("buffer : ", buffer)
-		//binary.LittleEndian.PutUint64(buffer[:], math.Float64bits(resultAverage))
+		//averageVlaue := <-resultAverage
+
+		//userValue := <-userInputValue
+		buffer = []byte(fmt.Sprintf("%v", values))
 		_, err = conn.Write(buffer)
 		if err != nil {
 			fmt.Printf("write from conn failed, err:%v\n", err)
@@ -150,37 +161,52 @@ func client_socket() {
 				return
 			}
 			//fmt.Println("client  Mean value byte : ", (data[:n]))
-			fmt.Println("socket client  Mean value  : ", string(data[:n]))
+			//fmt.Println("socket client  Mean value  : ", string(data[:n]))
+
+			//byte to string
+			temp := string(data[:n])
+			//remove "[]"
+			res := strings.Split(strings.Trim(temp, "[]"), " ")
+			values := make([]int, 0, len(res))
+			for _, raw := range res {
+				v, err := strconv.Atoi(raw)
+				if err != nil {
+					log.Print(err)
+					continue
+				}
+				values = append(values, v)
+			}
+
+			fmt.Println("socket client  Mean value  : ", average(values))
 		}
 		time.Sleep(1 * time.Second)
 	}
 }
 
-func client_pipe() {
+func client_pipe(userInputValue chan []int) {
 
 	// 建立client
 	fmt.Println("pipe client is ready")
-
 	for {
-
 		if isReady {
-			medianValue := <-resultMedian
-			fmt.Println("pipe client  Median value  : ", medianValue)
+			//medianValue := <-resultMedian
+			userValue := <-userInputValue
+
+			fmt.Println("pipe client  Median value  : ", median(userValue))
 		}
 		time.Sleep(1 * time.Second)
 	}
 }
 
-func client_shared_memory() {
+func client_shared_memory(userInputValue chan []int) {
 
 	// 建立client
 	fmt.Println("shared memory client is ready")
-
 	for {
-
 		if isReady {
-			modeValue := <-resultMode
-			fmt.Println("shared memory client  Mode value  : ", modeValue)
+			userValue := <-userInputValue
+
+			fmt.Println("shared memory client  Mode value  : ", mode(userValue))
 		}
 		time.Sleep(1 * time.Second)
 	}
